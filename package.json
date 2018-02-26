@@ -1,0 +1,21 @@
+{
+  "name": "instagram_node_util",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "instagram_node_util"
+  },
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "axios": "^0.18.0",
+    "commander": "^2.14.1",
+    "csv": "^2.0.0",
+    "csvtojson": "^1.1.9"
+  }
+}
