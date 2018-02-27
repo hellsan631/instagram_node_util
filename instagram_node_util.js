@@ -8,7 +8,7 @@ const fs = require('fs');
 const axios = require('axios');
 
 // Minimum occurances count to fetch.
-const minCountToFetch = 2;
+const minCountToFetch = 3;
 // How often to write csv file.
 const writeFrequency = 100;
 // delay between reads
@@ -303,6 +303,7 @@ function getInstagramCaptions(response, name) {
   let captionNum = 0;
 
   textBlob.name = name;
+  textBlob.followers = getInstagramFollowerCount(response);
   textBlob.biography = _replaceCommasOrReturnEmpty(response.user.biography);
   textBlob.external_url = _replaceCommasOrReturnEmpty(response.user.external_url);
   textBlob.full_name = _replaceCommasOrReturnEmpty(response.user.full_name);
