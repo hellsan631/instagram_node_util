@@ -8,13 +8,19 @@ const fs = require('fs');
 const axios = require('axios');
 
 // Minimum occurances count to fetch.
-const minCountToFetch = 3;
+const minCountToFetch = 2;
+// minimu follower threshold for text output exports.
+const textOutputFetchMinimumFollowers = 1700;
 // How often to write csv file.
-const writeFrequency = 100;
+const writeFrequency = 200;
 // delay between reads
 let sleepTime = 500;
 // factor if timeout occurs. 1.0 means no increase in delay.
 let timeoutIncreaseFactor = 1.1;
+
+let fetchedUsers = 0;
+let errorUsers = 0;
+let skippedUsers = 0;
 
 program
   .version('0.0.1')
@@ -117,32 +123,40 @@ async function updateMissingCounters(accountDict) {
 
     // Skip acounts with insufficient count, or with :cr suffix.
     if (count < minCountToFetch || name.indexOf(':cr') !== -1) {
+      skippedUsers++;
       continue;
     }
 
+    // if we're exporting text, set a follower threshold.
+    if (program.text_output &&
+      (!account.followers || account.followers < textOutputFetchMinimumFollowers)) {
+        console.log('skipping text_output: ', name, account.followers);
+      skippedUsers++;
+      continue;
+    }
     let fetch_success = true;
 
+    // Request fetching textual data.
+    const needFetchTextData = (program.text_output && account.textBlob == undefined);
     // only refetch if data isn't present.
-    if (account.followers === undefined || account.likes === undefined || isNaN(account.likes)) {
+    if (account.followers === undefined ||
+        account.likes === undefined ||
+        isNaN(account.likes) ||
+        needFetchTextData) {
       process.stdout.write(`fetching ${name}...`);
       // Retry with backoff.
       try {
         let result = await processAccount(name);
         accountDict[name] = Object.assign(account, result);
-        /*
-        if (account.likes == 0) {
-          // 0 means it's a private account with no media, ignore it.
-          console.log('skipping', account);
-        } else {
-          fetch_success = false;
-        }
-        */
+        fetchedUsers += 1;
       } catch (error) {
+        errorUsers += 1;
         if (error.expectedError != true) {
+          // 429 is "too many requests"
           sleepTime *= timeoutIncreaseFactor;
-          console.error('fetch error, increased sleep timer, skipping user',
+          console.error('fetch error, skipping user, increasing delay',
             sleepTime, name, error);
-          if (error.indexOf('ECONNRESET') != -1) {
+          if (error.toString().indexOf('ECONNRESET') != -1) {
             fetch_success = false;
           }
           await sleep(sleepTime * 2.0);
@@ -186,6 +200,7 @@ async function updateMissingCounters(accountDict) {
   }
   version = writeArray.length;
   writeCsv(`./data/out${version}_final.csv`, writeArray.join('\n'));
+  console.log(`complete. fetched ${fetchedUsers} users, ${errorUsers} errors.`)
 }
 
 async function sleep(ms){
@@ -209,10 +224,14 @@ async function getFbData(username) {
     response = await axios.get(url);
     process.stdout.write(`fetched (${response.data.user.followed_by.count})\n`);
   } catch (error) {
-    let text = `getFbData axios failed for ${username}, status: ${error}`;
+    let text = `getFbData axios failed for: ${username}, status: ${error}`;
     console.error(text);
     let newError = new Error(text);
     newError.expectedError = true;
+    const isTooManyConnects = (error.toString().indexOf('429') != -1);
+    if (isTooManyConnects) {
+      newError.expectedError = false;
+    }
     throw newError;
   }
   if (response.data == undefined || response.data == null) {
