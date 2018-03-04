@@ -110,7 +110,67 @@ function _accountToCsv(name, count, followers, likes, engagement, comments) {
 // first row to emit in out csv.
 const csvColumns = ['name','count','followers','likes','engagement','comments'];
 
+// Creater dir, if it does not exist.
+function createDirIfNotExists(dirName) {
+  if (!fs.existsSync(dirName)){
+    fs.mkdirSync(dirName);
+    console.info(`created directory: ${dirName}.`);
+  }
+}
+
+// Fetches user with retry. If it's a permanent error like 404, returns false.
+// If it's a temp error like connection problem, retries infinitely.
+async function fetchDataWithRetry(name, account) {
+  // Retry with backoff.
+  let retryConnect = true;
+  let fetchedData = false;
+  let retryDelay = sleepTime;
+  while (retryConnect) {
+    try {
+      retryConnect = false;
+      let result = await processAccount(name);
+      account = Object.assign(account, result);
+      fetchedUsers += 1;
+      fetchedData = true;
+    } catch (error) {
+      errorUsers += 1;
+
+      // 429 is too many connections, increase timeout.
+      if (error.status == '429') {
+        sleepTime *= timeoutIncreaseFactor;
+        console.error('fetch error, increasing delay, retrying. ',
+          error.code, error.status, sleepTime, name, error);
+        retryConnect = true;
+        sleepTime += 200;
+        await sleep(sleepTime * 2.0);
+      } else {
+        // Connection problems not related to throttling.
+        switch(error.code) {
+          case 'ENOTFOUND': // internet died
+          case 'ECONNRESET': // internet connection died
+          case 'ECONNABORTED': // timeout
+            retryConnect = true;
+            console.warn('connection problem, retrying with backoff..');
+            retryDelay *= 2.0;
+            retryDelay = Math.min(retryDelay, 120*1000);
+            break;
+          // other problem not related to connection, ie 404,
+          default:
+            console.error('unknown error, skipping user', error);
+            break;
+        }
+      }
+    }
+    console.log('sleeping', retryDelay);
+    await sleep(retryDelay);
+  }
+  console.log('exiting, fetchData', fetchedData);
+  return fetchedData;
+}
+
 async function updateMissingCounters(accountDict) {
+  createDirIfNotExists(`./data`);
+
   // Add column decriptiors to csv
   writeArray.push(csvColumns.join(','));
   writeCounter = 0;
@@ -134,41 +194,24 @@ async function updateMissingCounters(accountDict) {
       skippedUsers++;
       continue;
     }
-    let fetch_success = true;
 
     // Request fetching textual data.
     const needFetchTextData = (program.text_output && account.textBlob == undefined);
     // only refetch if data isn't present.
+    let shouldSaveData = true;
     if (account.followers === undefined ||
         account.likes === undefined ||
         isNaN(account.likes) ||
         needFetchTextData) {
       process.stdout.write(`fetching ${name}...`);
-      // Retry with backoff.
-      try {
-        let result = await processAccount(name);
-        accountDict[name] = Object.assign(account, result);
-        fetchedUsers += 1;
-      } catch (error) {
-        errorUsers += 1;
-        if (error.expectedError != true) {
-          // 429 is "too many requests"
-          sleepTime *= timeoutIncreaseFactor;
-          console.error('fetch error, skipping user, increasing delay',
-            sleepTime, name, error);
-          if (error.toString().indexOf('ECONNRESET') != -1) {
-            fetch_success = false;
-          }
-          await sleep(sleepTime * 2.0);
-        }
-        continue;
-      }
-      await sleep(sleepTime);
+      shouldSaveData = await fetchDataWithRetry(name, account);
     }
 
-    if (!fetch_success) {
+    if (!shouldSaveData) {
       continue;
     }
+
+    console.log('writing data for:', name);
     let record = _accountToCsv(
       name,
       account.count,
@@ -221,21 +264,24 @@ async function getFbData(username) {
   let response = undefined;
   try {
     var url = "https://www.instagram.com/" + username + "/?__a=1";
-    response = await axios.get(url);
+    response = await axios.get(url, {
+      timeout: 1500
+    });
     process.stdout.write(`fetched (${response.data.user.followed_by.count})\n`);
   } catch (error) {
-    let text = `getFbData axios failed for: ${username}, status: ${error}`;
+    let status = 'not_available';
+    if (error.response) {
+      status = error.response.status;
+    }
+    let text = `getFbData axios failed: ${username}, (${error}) code:${error.code} status:${status}`;
     console.error(text);
     let newError = new Error(text);
-    newError.expectedError = true;
-    const isTooManyConnects = (error.toString().indexOf('429') != -1);
-    if (isTooManyConnects) {
-      newError.expectedError = false;
-    }
+    newError.code = error.code; // connection error code, like 'ECONNABORTED' etc.
+    newError.stuats = status;
     throw newError;
   }
   if (response.data == undefined || response.data == null) {
-    error = new Error('response.data is invalid: ' + response.data);
+    error = new Error('response.data is invalid:' + response.data);
   }
   return response.data;
 }
@@ -326,6 +372,14 @@ function getInstagramCaptions(response, name) {
   textBlob.biography = _replaceCommasOrReturnEmpty(response.user.biography);
   textBlob.external_url = _replaceCommasOrReturnEmpty(response.user.external_url);
   textBlob.full_name = _replaceCommasOrReturnEmpty(response.user.full_name);
+
+  // TODO: Compute median follower and comment count, not mean.
+  // TODO: get the description into primary sheet
+  // TOD: get following count
+  //
+
+  // followed_by.count
+  //
   // TODO: Read and ignorep rivate accounts in original fetcher
   // TODO: Read video views. Right now account with videos only get thronw out
   // because they show 0 likes and 0 media.
