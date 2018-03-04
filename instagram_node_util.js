@@ -265,7 +265,7 @@ async function getFbData(username) {
   try {
     var url = "https://www.instagram.com/" + username + "/?__a=1";
     response = await axios.get(url, {
-      timeout: 1500
+      timeout: 2500
     });
     process.stdout.write(`fetched (${response.data.user.followed_by.count})\n`);
   } catch (error) {
@@ -311,31 +311,37 @@ function getInstagramFollowerCount(response) {
 }
 
 function getInstagramLikesCount(response) {
-  return getInstagramAveragedMediaCounts(response, 'likes');
+  return getMedianMediaCounts(response, 'likes');
 }
 
 function getInstagramCommentsCount(response) {
-  return getInstagramAveragedMediaCounts(response, 'comments');
+  return getMedianMediaCounts(response, 'comments');
 }
 
-function getInstagramAveragedMediaCounts(response, type) {
-  var count = 0;
-  var samples = 0;
+// Compute median of array of values.
+function median(values) {
+  values.sort( function(a,b) {return a - b;} );
+  var half = Math.floor(values.length/2);
+  if(values.length % 2)
+      return values[half];
+  else
+      return (values[half-1] + values[half]) / 2.0;
+}
+
+function getMedianMediaCounts(response, type) {
+  let counts = [];
   nodes_count = response.user.media.nodes.length;
   if (nodes_count == 0) {
     return 0;
   }
-  for (var i = 0; samples < 6, i + 3 < nodes_count; i++) {
+  for (var i = 0; i + 3 < nodes_count; i++) {
     var node = response.user.media.nodes[i + 3];
     if (node == null || node.is_video) {
       continue;
     }
-    count += node[type].count;
-    samples += 1;
+    counts.push(node[type].count);
   }
-  count = count / samples;
-
-  return count;
+  return median(counts);
 }
 
 function _replaceCommasOrReturnEmpty(text) {
@@ -373,14 +379,7 @@ function getInstagramCaptions(response, name) {
   textBlob.external_url = _replaceCommasOrReturnEmpty(response.user.external_url);
   textBlob.full_name = _replaceCommasOrReturnEmpty(response.user.full_name);
 
-  // TODO: Compute median follower and comment count, not mean.
-  // TODO: get the description into primary sheet
-  // TOD: get following count
-  //
-
-  // followed_by.count
-  //
-  // TODO: Read and ignorep rivate accounts in original fetcher
+  // TODO: Read and ignore private accounts in original fetcher
   // TODO: Read video views. Right now account with videos only get thronw out
   // because they show 0 likes and 0 media.
   nodes_count = response.user.media.nodes.length;
