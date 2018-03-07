@@ -12,7 +12,7 @@ const minCountToFetch = 2;
 // minimu follower threshold for text output exports.
 const textOutputFetchMinimumFollowers = 1700;
 // How often to write csv file.
-const writeFrequency = 200;
+const writeFrequency = 400;
 // delay between reads
 let sleepTime = 500;
 // factor if timeout occurs. 1.0 means no increase in delay.
@@ -164,7 +164,6 @@ async function fetchDataWithRetry(name, account) {
     console.log('sleeping', retryDelay);
     await sleep(retryDelay);
   }
-  console.log('exiting, fetchData', fetchedData);
   return fetchedData;
 }
 
@@ -201,6 +200,8 @@ async function updateMissingCounters(accountDict) {
     let shouldSaveData = true;
     if (account.followers === undefined ||
         account.likes === undefined ||
+        account.comments === undefined ||
+        account.comments == 'undefined' ||
         isNaN(account.likes) ||
         needFetchTextData) {
       process.stdout.write(`fetching ${name}...`);
@@ -211,7 +212,7 @@ async function updateMissingCounters(accountDict) {
       continue;
     }
 
-    console.log('writing data for:', name);
+    console.log('writing data for:', name, fetchedUsers);
     let record = _accountToCsv(
       name,
       account.count,
