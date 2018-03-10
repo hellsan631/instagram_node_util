@@ -161,7 +161,6 @@ async function fetchDataWithRetry(name, account) {
         }
       }
     }
-    console.log('sleeping', retryDelay);
     await sleep(retryDelay);
   }
   return fetchedData;
@@ -212,7 +211,6 @@ async function updateMissingCounters(accountDict) {
       continue;
     }
 
-    console.log('writing data for:', name, fetchedUsers);
     let record = _accountToCsv(
       name,
       account.count,
@@ -227,6 +225,10 @@ async function updateMissingCounters(accountDict) {
 
     // save textblob as well
     if (account.textBlob) {
+      // For first row, add the column names.
+      if (textBlobs.length == 0) {
+        textBlobs.push(Object.keys(account.textBlob).join(','));
+      }
       let csvEntry = Object.values(account.textBlob).join(',');
       // console.log('csventry:\n', csvEntry);
       textBlobs.push(csvEntry);
@@ -256,7 +258,7 @@ async function writeCsv(filename, data) {
     if (err) {
       console.log('Some error occured - file either not saved or corrupted file saved.');
     } else{
-      console.log('Wrote ' + filename);
+      console.log('Wrote ', filename, fetchedUsers);
     }
   });
 }
@@ -268,7 +270,7 @@ async function getFbData(username) {
     response = await axios.get(url, {
       timeout: 2500
     });
-    process.stdout.write(`fetched (${response.data.user.followed_by.count})\n`);
+    process.stdout.write(`fetched (${fetchedUsers})\n`);
   } catch (error) {
     let status = 'not_available';
     if (error.response) {
@@ -301,7 +303,6 @@ async function processAccount(accountName) {
   if (program.text_output) {
     textBlob = getInstagramCaptions(response, accountName);
   }
-  console.log('accountName, followers, likes)', accountName, followers, likes);
   return {followers, likes, engagement, comments, textBlob};
 }
 
@@ -379,7 +380,8 @@ function getInstagramCaptions(response, name) {
   textBlob.biography = _replaceCommasOrReturnEmpty(response.user.biography);
   textBlob.external_url = _replaceCommasOrReturnEmpty(response.user.external_url);
   textBlob.full_name = _replaceCommasOrReturnEmpty(response.user.full_name);
-
+  textBlob.profile_pic_url_hd = _replaceCommasOrReturnEmpty(response.user.profile_pic_url_hd);
+  textBlob.profile_pic_url = _replaceCommasOrReturnEmpty(response.user.profile_pic_url);
   // TODO: Read and ignore private accounts in original fetcher
   // TODO: Read video views. Right now account with videos only get thronw out
   // because they show 0 likes and 0 media.
