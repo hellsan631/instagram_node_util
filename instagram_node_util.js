@@ -103,12 +103,12 @@ async function readCsvAndMergeCounts(
       });
 }
 
-function _accountToCsv(name, count, followers, likes, engagement, comments) {
-  return `${name},${count},${followers},${likes},${engagement},${comments}`;
+function _accountToCsv(name, count, followers, likes, engagement, comments, id) {
+  return `${name},${count},${followers},${likes},${engagement},${comments},${id}`;
 }
 
 // first row to emit in out csv.
-const csvColumns = ['name','count','followers','likes','engagement','comments'];
+const csvColumns = ['name','count','followers','likes','engagement','comments','id'];
 
 // Creater dir, if it does not exist.
 function createDirIfNotExists(dirName) {
@@ -217,7 +217,8 @@ async function updateMissingCounters(accountDict) {
       account.followers,
       account.likes,
       account.engagement,
-      account.comments
+      account.comments,
+      account.id
     );
 
     writeArray.push(record);
@@ -303,7 +304,9 @@ async function processAccount(accountName) {
   if (program.text_output) {
     textBlob = getInstagramCaptions(response, accountName);
   }
-  return {followers, likes, engagement, comments, textBlob};
+  let id = response.user.id;
+
+  return {followers, likes, engagement, comments, id, textBlob};
 }
 
 
