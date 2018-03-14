@@ -131,7 +131,7 @@ async function updateMissingCounters(accountDict) {
     // if we're exporting text, set a follower threshold.
     if (program.text_output &&
       (account.followers && account.followers < textOutputFetchMinimumFollowers)) {
-        skipped_textOutMinFollowers += 1;
+        counters.skipped_textOutMinFollowers += 1;
       continue;
     }
 
@@ -151,7 +151,7 @@ async function updateMissingCounters(accountDict) {
       shouldSaveData = await fetchDataWithRetry(name, account);
     } else {
       counters.fetch_skipped += 1;
-      process.stdout.write(`skipping already fetched ${name}... `, );
+      console.log(`skipping already fetched ${name}... `, );
     }
 
     // old versions had left this undefined.
