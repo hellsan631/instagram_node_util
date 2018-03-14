@@ -6,21 +6,20 @@ const program = require('commander');
 const csv = require('csv');
 const fs = require('fs');
 const axios = require('axios');
+const { readCsvAndMergeCounts } = require('./parser.js');
 
 // Minimum occurances count to fetch.
 const minCountToFetch = 2;
 // minimu follower threshold for text output exports.
 const textOutputFetchMinimumFollowers = 1700;
 // How often to write csv file.
-const writeFrequency = 400;
+const writeFrequency = 1000;
 // delay between reads
 let sleepTime = 500;
 // factor if timeout occurs. 1.0 means no increase in delay.
 let timeoutIncreaseFactor = 1.1;
 
 let fetchedUsers = 0;
-let errorUsers = 0;
-let skippedUsers = 0;
 
 program
   .version('0.0.1')
@@ -30,78 +29,6 @@ program
   .parse(process.argv)
 
 let writeArray = [];
-
-// headers: array of column header names
-// input: array of input values
-// objMerge: merge into
-//
-// the first value is used as key.
-function _csvToObj(headers, input, objMerge) {
-  let objKey = input[0];
-  for (index = 1; index < input.length; index++) {
-    if (index >= headers.length) {
-      console.error('out of range index in headers', index, headers, input);
-    }
-    outputKey = headers[index];
-    if (!objMerge.hasOwnProperty(objKey)) {
-      objMerge[objKey] = {};
-    }
-    objMerge[objKey][outputKey] = input[index];
-  }
-}
-
-
-// Reads a csv and merges accountname:count into object map.
-//
-// for example
-// headersParam:       'count,followers'
-//
-// csv input row: 'tom,5,1000'
-// dictMergeInto: tom: {count:5, followers:1000}
-//
-// filenameCsv: file/path to csv
-// headersParam: comma delimited column names. if undefind, first row in csv is read for names.
-// dictMergeInto: merges values into this dictionary.
-// cbEndRead(data): callback after data is read.
-async function readCsvAndMergeCounts(
-  filenameCsv,
-  headersParam,
-  dictMergeInto,
-  cbEndRead,
-) {
-  let parse = csv.parse;
-  let readFirstRow = false;
-  let headers = headersParam;
-  // if headers is not passed in, assume first row contains column names.
-  if (headers != undefined && headers != null) {
-    headers = headers.split(',');
-  } else {
-    readFirstRow = true;
-  }
-
-  let lines_read = 0;
-  // read csv and merge into object.
-  fs.createReadStream(filenameCsv)
-      .pipe(parse({delimiter: ','}))
-      .on('data', async (csvrow) => {
-        if (readFirstRow) {
-          headers = csvrow;
-          readFirstRow = false;
-          return;
-        }
-        try {
-          _csvToObj(headers, csvrow, dictMergeInto);
-          lines_read++;
-        } catch (error) {
-          console.log('error _csvToObj(headers, csvrow, dictMergeInto)',
-            headers, csvrow, dictMergeInto, error);
-        }
-      })
-      .on('end', () => {
-        console.log(`read csv file: ${filenameCsv}, ${lines_read} lines.`);
-        cbEndRead(dictMergeInto);
-      });
-}
 
 function _accountToCsv(name, count, followers, likes, engagement, comments, id) {
   return `${name},${count},${followers},${likes},${engagement},${comments},${id}`;
@@ -133,10 +60,10 @@ async function fetchDataWithRetry(name, account) {
       fetchedUsers += 1;
       fetchedData = true;
     } catch (error) {
-      errorUsers += 1;
+      counters.fetchErrors += 1;
 
       // 429 is too many connections, increase timeout.
-      if (error.status == '429') {
+      if (error.status == '429' || error.status == 429) {
         sleepTime *= timeoutIncreaseFactor;
         console.error('fetch error, increasing delay, retrying. ',
           error.code, error.status, sleepTime, name, error);
@@ -166,6 +93,16 @@ async function fetchDataWithRetry(name, account) {
   return fetchedData;
 }
 
+const counters = {
+  total: 0,
+  skipped_minCount: 0,
+  skipped_cr: 0,
+  skipped_save_data: 0,
+  skipped_textOutMinFollowers: 0,
+  fetch_tried: 0,
+  fetch_skipped: 0,
+  fetchErrors: 0,
+}
 async function updateMissingCounters(accountDict) {
   createDirIfNotExists(`./data`);
 
@@ -176,25 +113,30 @@ async function updateMissingCounters(accountDict) {
 
   // Iterate and update records that are missing data.
   for (let name in accountDict) {
+    counters.total += 1;
     let account = accountDict[name];
     let count = account.count;
 
     // Skip acounts with insufficient count, or with :cr suffix.
     if (count < minCountToFetch || name.indexOf(':cr') !== -1) {
-      skippedUsers++;
+      counters.skipped_minCount += 1;
       continue;
     }
+    if (name.indexOf(':cr') !== -1) {
+      counters.skipped_cr += 1;
+      continue;
+    }
+    // console.log('checking object with fields:', name, Object.keys(account));
 
     // if we're exporting text, set a follower threshold.
     if (program.text_output &&
-      (!account.followers || account.followers < textOutputFetchMinimumFollowers)) {
-        console.log('skipping text_output: ', name, account.followers);
-      skippedUsers++;
+      (account.followers && account.followers < textOutputFetchMinimumFollowers)) {
+        skipped_textOutMinFollowers += 1;
       continue;
     }
 
     // Request fetching textual data.
-    const needFetchTextData = (program.text_output && account.textBlob == undefined);
+    const needFetchTextData = (program.text_output && account.biography == undefined);
     // only refetch if data isn't present.
     let shouldSaveData = true;
     if (account.followers === undefined ||
@@ -203,11 +145,24 @@ async function updateMissingCounters(accountDict) {
         account.comments == 'undefined' ||
         isNaN(account.likes) ||
         needFetchTextData) {
-      process.stdout.write(`fetching ${name}...`);
+      process.stdout.write(`fetching ${name}... `, );
+      // console.log('fetching object with fields:', name, Object.keys(account));
+      counters.fetch_tried += 1;
       shouldSaveData = await fetchDataWithRetry(name, account);
+    } else {
+      counters.fetch_skipped += 1;
+      process.stdout.write(`skipping already fetched ${name}... `, );
     }
 
+    // old versions had left this undefined.
+    if (account.external_url == undefined) {
+      account.external_url = '';
+    }
+    if (account.full_name == undefined) {
+      account.full_name = '';
+    }
     if (!shouldSaveData) {
+      counters.skipped_save_data += 1;
       continue;
     }
 
@@ -247,7 +202,12 @@ async function updateMissingCounters(accountDict) {
   }
   version = writeArray.length;
   writeCsv(`./data/out${version}_final.csv`, writeArray.join('\n'));
-  console.log(`complete. fetched ${fetchedUsers} users, ${errorUsers} errors.`)
+  console.log(`complete. fetched ${fetchedUsers} users.`)
+  console.log(counters);
+  if (program.text_output) {
+    // also write text blobs
+    writeCsv(`./data/outText${version}_final.csv`, textBlobs.join('\n'));
+  }
 }
 
 async function sleep(ms){
@@ -281,7 +241,7 @@ async function getFbData(username) {
     console.error(text);
     let newError = new Error(text);
     newError.code = error.code; // connection error code, like 'ECONNABORTED' etc.
-    newError.stuats = status;
+    newError.status = status;
     throw newError;
   }
   if (response.data == undefined || response.data == null) {
@@ -293,34 +253,36 @@ async function getFbData(username) {
 async function processAccount(accountName) {
   let response = {};
   response = await getFbData(accountName);
-  let followers = getInstagramFollowerCount(response);
-  let likes = getInstagramLikesCount(response).toFixed(0);
+  // console.log('fetched:\n', JSON.stringify(response, null, 2));
+  const userData = response.graphql.user;
+  let followers = getInstagramFollowerCount(userData);
+  let likes = getInstagramLikesCount(userData).toFixed(0);
   let engagement = 0;
   if (followers > 0) {
     engagement = (likes / followers * 100).toFixed(2);
   }
-  let comments = getInstagramCommentsCount(response).toFixed(0);
+  let comments = getInstagramCommentsCount(userData).toFixed(0);
   let textBlob = undefined;
   if (program.text_output) {
-    textBlob = getInstagramCaptions(response, accountName);
+    textBlob = getInstagramCaptions(userData, accountName);
   }
-  let id = response.user.id;
+  let id = userData.id;
 
   return {followers, likes, engagement, comments, id, textBlob};
 }
 
 
-function getInstagramFollowerCount(response) {
-  var count = response.user.followed_by.count;
+function getInstagramFollowerCount(user) {
+  var count = user.edge_followed_by.count;
   return Number(count);
 }
 
-function getInstagramLikesCount(response) {
-  return getMedianMediaCounts(response, 'likes');
+function getInstagramLikesCount(user) {
+  return getMedianMediaCounts(user, 'edge_liked_by');
 }
 
-function getInstagramCommentsCount(response) {
-  return getMedianMediaCounts(response, 'comments');
+function getInstagramCommentsCount(user) {
+  return getMedianMediaCounts(user, 'edge_media_to_comment');
 }
 
 // Compute median of array of values.
@@ -333,18 +295,20 @@ function median(values) {
       return (values[half-1] + values[half]) / 2.0;
 }
 
-function getMedianMediaCounts(response, type) {
+function getMedianMediaCounts(user, type) {
   let counts = [];
-  nodes_count = response.user.media.nodes.length;
-  if (nodes_count == 0) {
+  const nodes = user.edge_owner_to_timeline_media.edges;
+  if (nodes.length == 0) {
     return 0;
   }
-  for (var i = 0; i + 3 < nodes_count; i++) {
-    var node = response.user.media.nodes[i + 3];
+  for (var i = 1; i  < nodes.length; i++) {
+    var node = nodes[i].node;
     if (node == null || node.is_video) {
       continue;
     }
-    counts.push(node[type].count);
+    const count = node[type].count;
+    // console.log('got count', count, type);
+    counts.push(count);
   }
   return median(counts);
 }
@@ -373,73 +337,84 @@ function _replaceCommasOrReturnEmpty(text) {
 
 // Collects text fields including comment captions, urls, names, anything we can use
 // for analysis.
-function getInstagramCaptions(response, name) {
+function getInstagramCaptions(user, name) {
   let textBlob = {};
   let samples = 0;
   let captionNum = 0;
 
   textBlob.name = name;
-  textBlob.followers = getInstagramFollowerCount(response);
-  textBlob.biography = _replaceCommasOrReturnEmpty(response.user.biography);
-  textBlob.external_url = _replaceCommasOrReturnEmpty(response.user.external_url);
-  textBlob.full_name = _replaceCommasOrReturnEmpty(response.user.full_name);
-  textBlob.profile_pic_url_hd = _replaceCommasOrReturnEmpty(response.user.profile_pic_url_hd);
-  textBlob.profile_pic_url = _replaceCommasOrReturnEmpty(response.user.profile_pic_url);
+  textBlob.followers = getInstagramFollowerCount(user);
+  textBlob.biography = _replaceCommasOrReturnEmpty(user.biography);
+  textBlob.external_url = _replaceCommasOrReturnEmpty(user.external_url);
+  textBlob.full_name = _replaceCommasOrReturnEmpty(user.full_name);
+  textBlob.profile_pic_url_hd = _replaceCommasOrReturnEmpty(user.profile_pic_url_hd);
+  textBlob.profile_pic_url = _replaceCommasOrReturnEmpty(user.profile_pic_url);
   // TODO: Read and ignore private accounts in original fetcher
   // TODO: Read video views. Right now account with videos only get thronw out
   // because they show 0 likes and 0 media.
-  nodes_count = response.user.media.nodes.length;
-  for (var i = 0; samples < 6, i < nodes_count; i++) {
-    var node = response.user.media.nodes[i];
+  const nodes = user.edge_owner_to_timeline_media.edges;
+  for (var i = 0; i < nodes.length; i++) {
+    var node = nodes[i].node;
     if (node == null) {
       continue;
     }
-    textBlob['caption_' + captionNum] = _replaceCommasOrReturnEmpty(node.caption);
+    if (node.edge_media_to_caption.edges.length == 0) {
+      continue;
+    }
+    text = node.edge_media_to_caption.edges[0].node.text;
+    textBlob['caption_' + captionNum] = _replaceCommasOrReturnEmpty(text);
     captionNum++;
   }
 
   return textBlob;
 }
 
-function testcsvToObj() {
-  let headers = 'name,count,followers';
-  let row = 'tom,5,1000';
-  // initial dict contains only count not followers, should be overwritten.
-  let dict = {tom: {count:3} };
-  _csvToObj(headers.split(','), row.split(','), dict);
-  let expected = { tom: { count: '5', followers: '1000' } };
-  console.info(
-    'expected/actual test output:\n',
-    expected,
-    '\n',
-    dict);
-}
-
 // Main.
 async function main() {
-  testcsvToObj();
-
   let dictCounts = {};
   // Read the raw counst table first, output from crawler
   const columnNames = 'name,count';
-  await readCsvAndMergeCounts(
-    program.list,
-    columnNames,
-    dictCounts,
-    async (data) => {
-        // If present, read the previous output from here.
-        if (program.list_generated) {
-          await readCsvAndMergeCounts(
-            program.list_generated,
-            null,
-            dictCounts,
-            updateMissingCounters);
-        } else {
-          await updateMissingCounters(dictCounts);
-        }
-    });
+  const csvpath = program.list;
+  try {
+    await readCsvAndMergeCounts(
+      csvpath,
+      dictCounts,
+      columnNames.split(','),
+      1200000,
+    );
+  } catch (error) {
+    console.log('error loading program.list', csvpath, error);
+    return;
+  }
 
+  if (program.list_generated) {
+    try {
+      const file = program.list_generated;
+      await readCsvAndMergeCounts(
+        file,
+        dictCounts,
+        undefined,
+        1200000,);
+    } catch (error) {
+        console.log('error loading', file, error);
+        return;
+    }
+  }
 
-  console.log('done csv');
+  if (program.text_output) {
+    try {
+      const file = program.text_output;
+      await readCsvAndMergeCounts(
+        file,
+        dictCounts,
+        undefined,
+        1200000);
+    } catch (error) {
+        console.log('error loading', file, error);
+        return;
+    }
+  }
+  await updateMissingCounters(dictCounts);
 }
+
 main();
