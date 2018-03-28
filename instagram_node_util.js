@@ -40,7 +40,7 @@ function _accountToCsv(account, csvColumns) {
 }
 
 // First row to emit in csv, column names.
-const csvColumns = ['name','count','followers','likes','engagement','comments','id'];
+const csvColumns = ['name','count','followers','likes','engagement','comments','id','videoFraction','videoViews'];
 
 // First row to emit in text csv, column names.
 const csvColumnsText = ['name','followers','biography','external_url','full_name',
@@ -251,7 +251,7 @@ async function getFbData(username) {
   try {
     var url = "https://www.instagram.com/" + username + "/?__a=1";
     response = await axios.get(url, {
-      timeout: 2500
+      timeout: 2500,
     });
     process.stdout.write(`fetched (${fetchedUsers})\n`);
   } catch (error) {
@@ -281,6 +281,10 @@ async function processAccount(accountName, account) {
   let likes = getInstagramLikesCount(userData).toFixed(0);
   let engagement = 0;
 
+  // Fraction of media that is videos (0 to 1).
+  account.videoFraction = getMediaVideoPercentage(userData);
+  account.videoViews = getInstagramVideoViewsCount(userData);
+
   if (followers > 0) {
     engagement = (likes / followers * 100).toFixed(2);
   }
@@ -307,12 +311,20 @@ function getInstagramLikesCount(user) {
   return getMedianMediaCounts(user, 'edge_liked_by');
 }
 
+function getInstagramVideoViewsCount(user) {
+  return getMedianMediaCounts(user, 'video_view_count');
+}
+
 function getInstagramCommentsCount(user) {
   return getMedianMediaCounts(user, 'edge_media_to_comment');
 }
 
 // Compute median of array of values.
 function median(values) {
+  if (values.length == 0) {
+    return 0;
+  }
+
   values.sort( function(a,b) {return a - b;} );
   var half = Math.floor(values.length/2);
   if(values.length % 2)
@@ -321,20 +333,42 @@ function median(values) {
       return (values[half-1] + values[half]) / 2.0;
 }
 
+// Returns percentile of media that are cideos.
+function getMediaVideoPercentage(user) {
+  let videoCount = 0;
+  const nodes = user.edge_owner_to_timeline_media.edges;
+  for (var i = 0; i  < nodes.length; i++) {
+    videoCount += nodes[i].node.is_video;
+  }
+  if (videoCount == 0) {
+    return 0;
+  };
+  return videoCount / nodes.length;
+}
+
+// Retruns median for a counter like likes, comments or video views.
 function getMedianMediaCounts(user, type) {
   let counts = [];
   const nodes = user.edge_owner_to_timeline_media.edges;
+
   if (nodes.length == 0) {
     return 0;
   }
+
   for (var i = 1; i  < nodes.length; i++) {
     var node = nodes[i].node;
-    if (node == null || node.is_video) {
+    if (node == null) {
       continue;
     }
-    const count = node[type].count;
-    // console.log('got count', count, type);
-    counts.push(count);
+    let count = 0;
+    if (type == 'video_view_count') {
+      count = node[type];
+    } else {
+      count = node[type].count;
+    }
+    if (count != undefined) {
+      counts.push(count);
+    }
   }
   return median(counts);
 }
