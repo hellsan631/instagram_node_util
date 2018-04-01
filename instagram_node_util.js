@@ -13,11 +13,14 @@ const minCountToFetch = 2;
 // minimu follower threshold for text output exports.
 const textOutputFetchMinimumFollowers = 1700;
 // How often to write csv file.
-const writeFrequency = 1000;
+const writeFrequency = 2000;
 // delay between reads
-let sleepTime = 500;
+let sleepTime = 2800;
 // factor if timeout occurs. 1.0 means no increase in delay.
-let timeoutIncreaseFactor = 1.1;
+let timeoutIncreaseOffset = 300;
+
+// how long to sleep when timeout occurs.
+const timeooutSleep = 1000*60*3;
 
 let fetchedUsers = 0;
 
@@ -75,12 +78,13 @@ async function fetchDataWithRetry(name, account) {
 
       // 429 is too many connections, increase timeout.
       if (error.status == '429' || error.status == 429) {
-        sleepTime *= timeoutIncreaseFactor;
-        console.error('fetch error, increasing delay, retrying. ',
+        sleepTime += timeoutIncreaseOffset;
+        console.error(new Date().toLocaleString(),
+          'fetch error, increasing delay, retrying. ',
           error.code, error.status, sleepTime, name, error);
         retryConnect = true;
-        sleepTime += 200;
-        await sleep(sleepTime * 2.0);
+        // sleep 3 minutes
+        await sleep(timeoutSleep);
       } else {
         // Connection problems not related to throttling.
         switch(error.code) {
